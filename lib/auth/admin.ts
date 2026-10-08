@@ -74,33 +74,77 @@ export async function requireAdmin(): Promise<AdminSession> {
     });
   }
 
-  if (profileError || !profile) {
+  const normalizedEmail = (user.email || '').toLowerCase().trim();
+  const isDesignatedAdmin =
+    normalizedEmail === 'info@benzwell.in' ||
+    normalizedEmail === 'ceo.office.atharva@gmail.com' ||
+    user.user_metadata?.role === 'admin';
+
+  let currentProfile = profile;
+
+  if (!currentProfile) {
+    if (isDesignatedAdmin) {
+      const { data: newProfile } = await adminClient
+        .from('profiles')
+        .upsert(
+          {
+            id: user.id,
+            email: normalizedEmail,
+            full_name: user.user_metadata?.full_name || 'BenzWell Administrator',
+            role: 'admin',
+            is_verified: true,
+            is_disabled: false,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        )
+        .select('id, email, full_name, role, is_disabled, is_verified')
+        .single();
+
+      currentProfile = newProfile;
+    } else {
+      throw new AdminAuthorizationError(
+        'NO_PROFILE',
+        'Admin profile record not found in database.'
+      );
+    }
+  }
+
+  if (!currentProfile) {
     throw new AdminAuthorizationError(
       'NO_PROFILE',
-      'Admin profile record not found in database. Please run admin provisioning.'
+      'Admin profile record not found in database.'
     );
   }
 
-  if (profile.is_disabled) {
+  if (currentProfile.is_disabled) {
     throw new AdminAuthorizationError(
       'ACCOUNT_DISABLED',
       'Your administrative account has been suspended.'
     );
   }
 
-  if (profile.role !== 'admin') {
-    throw new AdminAuthorizationError(
-      'FORBIDDEN_NOT_ADMIN',
-      'Your account does not have administrator access.'
-    );
+  if (currentProfile.role !== 'admin' && currentProfile.role !== 'super_admin') {
+    if (isDesignatedAdmin) {
+      await adminClient
+        .from('profiles')
+        .update({ role: 'admin', updated_at: new Date().toISOString() })
+        .eq('id', user.id);
+      currentProfile.role = 'admin';
+    } else {
+      throw new AdminAuthorizationError(
+        'FORBIDDEN_NOT_ADMIN',
+        'Your account does not have administrator access.'
+      );
+    }
   }
 
   return {
     user: {
       id: user.id,
-      email: user.email || profile.email,
+      email: user.email || currentProfile.email,
     },
-    profile,
+    profile: currentProfile,
     adminClient,
   };
 }

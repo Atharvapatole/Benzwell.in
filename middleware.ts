@@ -1,6 +1,15 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+function normalizeUrl(url: string | undefined): string {
+  if (!url || !url.trim()) return '';
+  let clean = url.trim();
+  if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+    clean = `https://${clean}`;
+  }
+  return clean.replace(/\/+$/, '');
+}
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request: {
@@ -14,41 +23,52 @@ export async function middleware(request: NextRequest) {
   response.headers.set('X-XSS-Protection', '1; mode=block');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey =
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseUrl = normalizeUrl(rawUrl);
+  const supabaseAnonKey = (
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return response;
-  }
-
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet: Array<{ name: string; value: string; options?: CookieOptions }>) {
-        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-        response = NextResponse.next({
-          request,
-        });
-        cookiesToSet.forEach(({ name, value, options }) =>
-          response.cookies.set(name, value, options)
-        );
-      },
-    },
-  });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    ''
+  ).trim();
 
   const pathname = request.nextUrl.pathname;
 
   // 1. Admin Login & Unauthorized Routes — Always accessible without authentication gating
   if (pathname === '/admin/login' || pathname === '/admin/unauthorized') {
     return response;
+  }
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return response;
+  }
+
+  let user = null;
+  try {
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet: Array<{ name: string; value: string; options?: CookieOptions }>) {
+          try {
+            cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+            response = NextResponse.next({
+              request,
+            });
+            cookiesToSet.forEach(({ name, value, options }) =>
+              response.cookies.set(name, value, options)
+            );
+          } catch {
+            // Ignored
+          }
+        },
+      },
+    });
+
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch (authErr) {
+    console.warn('[Middleware Auth Warning]', authErr);
   }
 
   // 2. Protect Admin Dashboard Routes (/admin/*) — Requires authenticated session
