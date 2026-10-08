@@ -13,7 +13,11 @@ const AUTH_TAG_LENGTH = 16;
  * Derive or retrieve the 32-byte master encryption key from server environment
  */
 function getMasterKey(): Buffer {
-  const envKey = process.env.BENZWELL_CREDENTIAL_ENCRYPTION_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || 'benzwell-production-secret-key-fallback-32bytes!';
+  const envKey =
+    process.env.CREDENTIAL_ENCRYPTION_KEY ||
+    process.env.BENZWELL_CREDENTIAL_ENCRYPTION_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    'benzwell-production-secret-key-fallback-32bytes!';
   // Hash to ensure fixed 32 bytes (256 bits)
   return crypto.createHash('sha256').update(envKey).digest();
 }
